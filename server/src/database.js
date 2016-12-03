@@ -1,4 +1,6 @@
 // Data goes here.
+//Data was already here when I got here.
+//I am here to confirm that I have read the assignment up to the database commit
 var initialData = {
   // The "user" collection. Contains all of the users in our Facebook system.
   "users": {
