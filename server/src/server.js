@@ -3,6 +3,7 @@ var express = require('express');
 // Creates an Express server.
 var app = express();
 var StatusUpdateSchema = require('./schemas/statusupdate.json');
+var CommentSchema = require('./schemas/comment.json');
 var validate = require('express-jsonschema').validate;
 var database = require('./database.js');
 var readDocument = database.readDocument;
@@ -43,7 +44,6 @@ function getFeedData(user) {
   return feedData;
 }
 
-
 /**
  * Get the user ID from a token. Returns -1 (an invalid ID)
  * if it fails.
@@ -67,23 +67,6 @@ function getUserIdFromToken(authorizationLine) {
       // Return an invalid ID. return -1;
     }
   }
-
-/**
-* Get the feed data for a particular user.
-*/
-app.get('/user/:userid/feed', function(req, res) {
-  var userid = req.params.userid;
-  var fromUser = getUserIdFromToken(req.get('Authorization')); // userid is a string. We need it to be a number.
-  // Parameters are always strings.
-  var useridNumber = parseInt(userid, 10);
-  if (fromUser === useridNumber) {
-      // Send response.
-      res.send(getFeedData(userid));
-  } else {
-      // 401: Unauthorized request.
-      res.status(401).end();
-    }
-});
 
 /**
  * Adds a new status update to the database.
@@ -120,6 +103,40 @@ function postStatusUpdate(user, location, contents) {
   // Return the newly-posted object.
   return newStatusUpdate;
   }
+
+  /**
+   * Adds a new comment to the database.
+   */
+  function postComment(feedItemId, author, contents) {
+  var feedItem = readDocument('feedItems', feedItemId);
+  feedItem.comments.push({
+    "author": author,
+    "contents": contents,
+    "postDate": new Date().getTime(),
+    "likeCounter": []
+  });
+  writeDocument('feedItems', feedItem);
+  // Return a resolved version of the feed item.
+  return getFeedItemSync(feedItemId);
+}
+
+/**
+* Get the feed data for a particular user.
+*/
+app.get('/user/:userid/feed', function(req, res) {
+  var userid = req.params.userid;
+  var fromUser = getUserIdFromToken(req.get('Authorization')); // userid is a string. We need it to be a number.
+  // Parameters are always strings.
+  var useridNumber = parseInt(userid, 10);
+  if (fromUser === useridNumber) {
+      // Send response.
+      res.send(getFeedData(userid));
+  } else {
+      // 401: Unauthorized request.
+      res.status(401).end();
+    }
+});
+
 // `POST /feeditem { userId: user, location: location, contents: contents }`
 app.post('/feeditem',
   validate({ body: StatusUpdateSchema }), function(req, res) {
@@ -277,6 +294,71 @@ app.post('/search', function(req, res) {
   }
 });
 
+//post a comment
+app.post('/comment', validate({ body: CommentSchema }), function(req, res) {
+  // If this function runs, `req.body` passed JSON validation!
+  var body = req.body;
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  // Check if requester is authorized to post this status update. // (The requester must be the author of the update.)
+  if (fromUser === body.author) {
+    var newUpdate = postComment(body.feedItemId, body.author, body.contents);
+    // When POST creates a new resource, we should tell the client about it // in the 'Location' header and use status code 201.
+    res.status(201);
+    res.set('Comment', newUpdate);
+         // Send the update!
+    res.send(newUpdate);
+  } else {
+      // 401: Unauthorized.
+      res.status(401).end();
+    }
+});
+
+// Like a comment
+app.put('/feeditem/:feeditemid/commentId/:commentIdx/likelist/:userid', function(req, res) {
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  // Convert params from string to number.
+  var feedItemId = parseInt(req.params.feeditemid, 10);
+  var userId = parseInt(req.params.userid, 10);
+  var commentIdx = parseInt(req.params.commentIdx, 10);
+  if (fromUser === userId) {
+
+    var feedItem = readDocument('feedItems', feedItemId);
+    var comment = feedItem.comments[commentIdx];
+    comment.likeCounter.push(userId);
+    writeDocument('feedItems', feedItem);
+    comment.author = readDocument('users', comment.author);
+    res.send(comment);
+
+  } else {
+    // 401: Unauthorized.
+    res.status(401).end();
+  }
+});
+
+//unlike a comment
+app.delete('/feeditem/:feeditemid/commentId/:commentIdx/likelist/:userid',function(req, res) {
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  // Convert params from string to number.
+  var feedItemId = parseInt(req.params.feeditemid, 10);
+  var userId = parseInt(req.params.userid, 10);
+  var commentIdx = parseInt(req.params.commentIdx, 10);
+  if (fromUser === userId) {
+    var feedItem = readDocument('feedItems', feedItemId);
+    var comment = feedItem.comments[commentIdx];
+    var userIndex = comment.likeCounter.indexOf(userId);
+    if (userIndex !== -1) {
+      comment.likeCounter.splice(userIndex, 1);
+      writeDocument('feedItems', feedItem);
+    }
+    comment.author = readDocument('users', comment.author);
+    res.send(comment);
+
+  } else {
+    // 401: Unauthorized.
+    res.status(401).end();
+  }
+});
+
 // Reset database.
 app.post('/resetdb', function(req, res) {
   console.log("Resetting database...");
@@ -285,8 +367,6 @@ app.post('/resetdb', function(req, res) {
   // res.send() sends an empty response with status code 200
   res.send();
 });
-
-
 
 /**
   * Translate JSON Schema Validation failures into error 400s.
@@ -300,6 +380,7 @@ app.use(function(err, req, res, next) {
     next(err);
   }
 });
+
 // Starts the server on port 3000!
 app.listen(3000, function () {
   console.log('Example app listening on port 3000!');
